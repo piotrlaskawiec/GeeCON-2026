@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>GeeCON 2026 Planner</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 1400px; margin: 0 auto; padding: 1rem; background: #f8fafc; }
+      h1 { color: #1e293b; margin-bottom: 1rem; }
+      .day-hdr { color: #334155; border-bottom: 2px solid #e2e8f0; padding-bottom: .4rem; margin-top: 2rem; cursor: pointer; user-select: none; display: flex; align-items: center; gap: .5rem; }
+      .day-hdr:hover { color: #1e293b; }
+      .fold-icon { font-size: .8rem; color: #94a3b8; }
+
+      .categories { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
+      .cat-btn { background: #fff; color: #334155; border: 1px solid #cbd5e1; border-radius: 999px; padding: .3rem .8rem; font-size: .8rem; cursor: pointer; }
+      .cat-btn:hover { border-color: #16a34a; }
+      .cat-btn.active { background: #16a34a; color: #fff; border-color: #16a34a; }
+
+      .legend { display: flex; flex-wrap: wrap; gap: 1rem; font-size: .82rem; margin-bottom: 1.5rem; align-items: center; }
+      .legend > div { display: flex; align-items: center; gap: .35rem; }
+      .dot { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+      .dot.rec      { background: #dcfce7; border: 2px solid #16a34a; }
+      .dot.grey     { background: #f1f5f9; border: 1px solid #e2e8f0; }
+      .dot.selected { background: #dbeafe; border: 2px solid #2563eb; }
+      .dot.blocked  { background: #f8fafc; border: 1px dashed #d1d5db; }
+
+      .grid { display: grid; gap: 2px; background: #e2e8f0; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; margin-bottom: 2rem; }
+      .hdr  { background: #1e293b; color: #fff; font-weight: 600; font-size: .8rem; padding: .5rem; text-align: center; }
+      .time { background: #f1f5f9; color: #64748b; font-size: .72rem; font-weight: 600; padding: .4rem; display: flex; align-items: center; justify-content: center; text-align: center; }
+      .cell { background: #fff; padding: .3rem; min-height: 70px; display: flex; flex-direction: column; gap: 2px; }
+      .talk { border-radius: 5px; padding: .4rem .5rem; cursor: pointer; user-select: none; transition: opacity .1s; }
+      .talk:hover { opacity: .85; }
+      .talk.rec      { background: #dcfce7; border: 2px solid #16a34a; color: #166534; }
+      .talk.grey     { background: #f1f5f9; border: 1px solid #e2e8f0; color: #94a3b8; }
+      .talk.selected { background: #dbeafe; border: 2px solid #2563eb; color: #1e40af; }
+      .talk.blocked  { background: #f8fafc; border: 1px dashed #d1d5db; color: #cbd5e1; cursor: not-allowed; }
+      .talk.blocked:hover { opacity: 1; }
+      .title   { font-weight: 600; font-size: .78rem; line-height: 1.3; margin-bottom: .2rem; }
+      .speaker { font-size: .7rem; }
+
+      .footer { position: sticky; bottom: 0; background: #f8fafc; border-top: 1px solid #e2e8f0; padding: .75rem 0; margin-top: 1rem; }
+      .btn-plan { background: #16a34a; color: white; padding: .55rem 1.25rem; border: none; border-radius: 6px; font-size: .9rem; cursor: pointer; }
+      .btn-plan:disabled { background: #94a3b8; cursor: not-allowed; }
+      #status { color: #64748b; font-size: .85rem; margin-top: .75rem; }
+
+      #loading { color: #94a3b8; text-align: center; padding: 4rem 1rem; font-size: 1rem; }
+      #planner { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>GeeCON 2026 Planner</h1>
+
+    <div id="loading">Loading sessions…</div>
+
+    <div id="planner">
+      <div class="categories" id="categories"></div>
+
+      <div class="legend">
+        <div><div class="dot rec"></div>Matches selected category</div>
+        <div><div class="dot grey"></div>Other sessions</div>
+        <div><div class="dot selected"></div>Selected (click to toggle)</div>
+        <div><div class="dot blocked"></div>TBA</div>
+      </div>
+
+      <div id="schedule"></div>
+
+      <div class="footer">
+        <button class="btn-plan" id="btn-plan" disabled>Add selected sessions to my plan (0)</button>
+        <div id="status"></div>
+      </div>
+    </div>
+
+    <script type="module">
+      import { App } from "https://unpkg.com/@modelcontextprotocol/ext-apps@1.7.1/app-with-deps";
+
+      const app = new App({ name: "explore-geecon-sessions", version: "1.0.0" });
+
+      //region NOT IMPORTANT
+      let allSessions = [];
+      const selected = new Set();
+      const activeCategories = new Set();
+      const foldedDays = new Set();
+
+      // ── helpers ─────────────────────────────────────────────────────────────────
+      // Declared before top-level await to avoid TDZ when render() resumes.
+
+      const sessionKey = s => `${s.date}|${s.timeSlot}|${s.room || s.title}`;
+      const groupBy    = (arr, fn) => arr.reduce((acc, x) => { (acc[fn(x)] ??= []).push(x); return acc; }, {});
+      const esc        = t => String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+      const isBlocked  = s => { const t = s.title?.trim().toLowerCase() ?? ""; return t === "tba" || t === "lightning talk"; };
+
+      //endregion
+
+      // Restore previously selected sessions passed by the AI when reopening the tool.
+      app.ontoolinput = (params) => {
+        if(params.arguments && params.arguments.previouslySelectedSessions) {
+          try { JSON.parse(params.arguments.previouslySelectedSessions).forEach(k => selected.add(k)); } catch {}
+          render();
+        }
+      };
+
+      await app.connect();
+
+      try {
+        const resource = await app.readServerResource({ uri: "data://geecon/sessions" });
+        //region NOT IMPORTANT
+        allSessions = JSON.parse(resource.contents[0].text);
+
+        initCategories();
+        render();
+
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("planner").style.display = "block";
+        //endregion
+      } catch (e) {
+        document.getElementById("loading").textContent = "Failed to load sessions: " + e.message;
+      }
+
+      //region NOT IMPORTANT
+      // ── categories ───────────────────────────────────────────────────────────────
+
+      function initCategories() {
+        const cats = [...new Set(allSessions.map(s => s.category).filter(Boolean))].sort();
+        const container = document.getElementById("categories");
+        cats.forEach(cat => {
+          const btn = document.createElement("button");
+          btn.className = "cat-btn";
+          btn.textContent = cat;
+          btn.addEventListener("click", () => {
+            activeCategories.has(cat) ? activeCategories.delete(cat) : activeCategories.add(cat);
+            btn.classList.toggle("active");
+            render();
+          });
+          container.appendChild(btn);
+        });
+      }
+
+      // ── rendering ───────────────────────────────────────────────────────────────
+
+      function render() {
+        const byDate = groupBy(allSessions, s => s.date);
+        let html = "";
+
+        for (const [date, talks] of Object.entries(byDate)) {
+          const rooms = [...new Set(talks.filter(s => s.room).map(s => s.room))];
+          const bySlot = groupBy(talks, s => s.timeSlot);
+          const slots  = Object.keys(bySlot).sort();
+          const folded = foldedDays.has(date);
+
+          html += `<h2 class="day-hdr" data-date="${esc(date)}">${esc(date)} <span class="fold-icon">${folded ? "▶" : "▼"}</span></h2>`;
+
+          if (!folded) {
+            html += `<div class="grid" style="grid-template-columns:90px ${rooms.map(() => "1fr").join(" ")}">`;
+            html += `<div class="hdr"></div>` + rooms.map(r => `<div class="hdr">${esc(r)}</div>`).join("");
+
+            for (const slot of slots) {
+              html += `<div class="time">${esc(slot)}</div>`;
+              const slotTalks = bySlot[slot];
+
+              if (slotTalks.length === 1 && !slotTalks[0].room) {
+                // Single session with no room → span all columns.
+                html += `<div class="cell" style="grid-column:span ${rooms.length}">${talkCard(slotTalks[0])}</div>`;
+              } else {
+                // Group sessions by room — multiple sessions sharing the same room stack in one cell.
+                // Sessions without a known room (TBA/lightning talk, data-slot-detail="") fall back
+                // to their JSON index position so they remain visible.
+                const roomMap = rooms.map(() => []);
+                slotTalks.forEach((s, i) => {
+                  const col = rooms.indexOf(s.room);
+                  roomMap[col >= 0 ? col : i % rooms.length].push(s);
+                });
+                for (let i = 0; i < rooms.length; i++) {
+                  html += `<div class="cell">${roomMap[i].map(s => talkCard(s)).join("")}</div>`;
+                }
+              }
+            }
+            html += `</div>`;
+          }
+        }
+
+        document.getElementById("schedule").innerHTML = html;
+
+        document.querySelectorAll(".day-hdr").forEach(hdr => {
+          hdr.addEventListener("click", () => {
+            const date = hdr.dataset.date;
+            foldedDays.has(date) ? foldedDays.delete(date) : foldedDays.add(date);
+            render();
+          });
+        });
+
+        updatePlanButton();
+      }
+
+      function talkCard(s) {
+        if (isBlocked(s)) {
+          return `<div class="talk blocked">
+            <div class="title">${esc(s.title)}</div>
+            <div class="speaker">${esc(s.speaker ?? "")}</div>
+          </div>`;
+        }
+        const key = sessionKey(s);
+        const c = selected.has(key)                                               ? "selected"
+                : (activeCategories.size > 0 && activeCategories.has(s.category)) ? "rec"
+                : "grey";
+        return `<div class="talk ${c}" data-key="${esc(key)}">
+          <div class="title">${esc(s.title)}</div>
+          <div class="speaker">${esc(s.speaker ?? "")}</div>
+        </div>`;
+      }
+
+      // ── event wiring ────────────────────────────────────────────────────────────
+
+      document.getElementById("schedule").addEventListener("click", e => {
+        const card = e.target.closest(".talk");
+        if (!card || card.classList.contains("blocked")) return;
+        const key = card.dataset.key;
+        selected.has(key) ? selected.delete(key) : selected.add(key);
+        render();
+      });
+
+      function updatePlanButton() {
+        const btn = document.getElementById("btn-plan");
+        btn.textContent = `Add selected sessions to my plan (${selected.size})`;
+        btn.disabled = selected.size === 0;
+      }
+
+      //endregion
+
+      document.getElementById("btn-plan").addEventListener("click", async () => {
+        //region NOT IMPORTANT
+        const picks = allSessions.filter(s => selected.has(sessionKey(s)));
+        const keys  = picks.map(sessionKey);
+        //endregion
+        const text  = "My selected GeeCON sessions:\n"
+          + picks.map(s => `• ${s.title} — ${s.speaker} | ${s.date}, ${s.timeSlot}${s.room ? ", " + s.room : ""}`).join("\n")
+          + `\n\npreviouslySelectedSessions: ${JSON.stringify(keys)}`;
+
+        await app.updateModelContext({ content: [{ type: "text", text }] });
+        //region NOT IMPORTANT
+        document.getElementById("status").textContent = `✓ ${picks.length} session(s) added to your plan.`;
+        //endregion
+      });
+    </script>
+  </body>
+</html>

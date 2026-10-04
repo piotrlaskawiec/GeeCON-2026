@@ -1,0 +1,95 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.0.6'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.comsenity.geecon.genai'
+version = '1.0-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://repo.spring.io/milestone' }
+}
+
+ext {
+    springAiVersion = '2.0.0-M5'
+    springAiA2aVersion = '0.2.0'
+    otelInstrumentationVersion = '2.27.0'
+    otelBomVersion = '1.61.0'
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.ai:spring-ai-bom:${springAiVersion}"
+        // Force every io.opentelemetry:* artifact to >= 1.60.0 so LogRecordBuilder.setException(Throwable)
+        // (added in 1.60.0 and called by newer otel SDK code paths) resolves at runtime.
+        // Imported AFTER Spring Boot / Spring AI BOMs so this pin wins.
+        mavenBom "io.opentelemetry:opentelemetry-bom:${otelBomVersion}"
+    }
+}
+
+dependencies {
+    implementation project(':geecon-agenda-extractor')
+
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-json'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // Spring Boot 4: brings OtlpMetricsExportAutoConfiguration / PrometheusMetricsExportAutoConfiguration
+    // (in spring-boot-micrometer-metrics) and OpenTelemetryProperties (in spring-boot-opentelemetry).
+    // Both are required: the metrics autoconfig has @ConditionalOnClass(OpenTelemetryProperties).
+    implementation 'org.springframework.boot:spring-boot-starter-micrometer-metrics'
+    implementation 'org.springframework.boot:spring-boot-starter-opentelemetry'
+
+    implementation 'io.micrometer:micrometer-registry-otlp'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
+    // Spring AI: OpenAI chat + MCP client (streamable-HTTP transport)
+    implementation 'org.springframework.ai:spring-ai-starter-model-openai'
+    implementation 'org.springframework.ai:spring-ai-starter-mcp-client'
+
+    // Spring AI Community A2A server: auto-configures /.well-known/agent-card.json,
+    // the JSON-RPC message endpoint, and the task/queue/store beans. Pulls in
+    // io.github.a2asdk:a2a-java-sdk-spec + a2a-java-sdk-server-common transitively.
+    implementation "org.springaicommunity:spring-ai-a2a-server-autoconfigure:${springAiA2aVersion}"
+
+    // OpenTelemetry — auto-instrumentation + Spring AI observability bridge
+    implementation "io.opentelemetry.instrumentation:opentelemetry-spring-boot-starter:${otelInstrumentationVersion}"
+    implementation 'io.micrometer:micrometer-tracing-bridge-otel'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// OTel Java Agent — bytecode-level instrumentation of java.net.http.HttpClient (used by the
+// streamable-HTTP MCP client) and Spring MVC (the A2A endpoint). Required so the inbound POST
+// from the coordinator becomes a child span of the coordinator's A2A client span and the outbound
+// MCP call becomes a child span of this agent's recommend() span. Without it the trace splits.
+configurations { otelAgent }
+dependencies {
+    otelAgent "io.opentelemetry.javaagent:opentelemetry-javaagent:${otelInstrumentationVersion}"
+}
+
+tasks.named('bootRun') {
+    dependsOn configurations.otelAgent
+    doFirst {
+        jvmArgs "-javaagent:${configurations.otelAgent.singleFile}"
+    }
+    environment 'OTEL_SERVICE_NAME', 'geecon-a2a-agenda-agent'
+    environment 'OTEL_TRACES_EXPORTER', 'otlp'
+    environment 'OTEL_METRICS_EXPORTER', 'otlp'
+    environment 'OTEL_LOGS_EXPORTER', 'otlp'
+    environment 'OTEL_EXPORTER_OTLP_PROTOCOL', 'grpc'
+    environment 'OTEL_EXPORTER_OTLP_ENDPOINT', System.getenv('OTEL_EXPORTER_OTLP_ENDPOINT') ?: 'http://localhost:4317'
+    environment 'OTEL_PROPAGATORS', 'tracecontext,baggage'
+}

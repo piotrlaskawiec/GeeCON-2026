@@ -1,0 +1,65 @@
+spring:
+  application:
+    name: geecon-a2a-scoring-agent
+  main:
+    banner-mode: off
+
+server:
+  port: 8082
+
+embabel:
+  models:
+    default-llm: gpt-4.1-mini
+  agent:
+    platform:
+      name: geecon-scoring-platform
+      scanning:
+        annotation: true
+
+# OpenAI key picked up from env (OPENAI_API_KEY) by Embabel/Spring AI underneath.
+# spring.ai.openai.api-key acts as a Spring config fallback.
+spring.ai.openai.api-key: ${OPENAI_API_KEY:}
+spring.ai.openai.chat.options.model: gpt-4.1-mini
+
+# OpenTelemetry — points at the docker-compose grafana/otel-lgtm container by default.
+otel:
+  service:
+    name: geecon-a2a-scoring-agent
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+      protocol: ${OTEL_EXPORTER_OTLP_PROTOCOL:grpc}
+  traces:
+    exporter: otlp
+  metrics:
+    exporter: otlp
+  logs:
+    exporter: otlp
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  observations:
+    annotations:
+      enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+  metrics:
+    distribution:
+      percentiles-histogram:
+        "[gen_ai.client.token.usage]": true
+        "[gen_ai.client.operation.duration]": true
+    tags:
+      service.name: geecon-a2a-scoring-agent
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_METRICS_OTLP_URL:http://localhost:4318/v1/metrics}
+        step: 5s
+        aggregation-temporality: cumulative
+        histogram-flavor: explicit_bucket_histogram
+        resource-attributes:
+          service.name: geecon-a2a-scoring-agent

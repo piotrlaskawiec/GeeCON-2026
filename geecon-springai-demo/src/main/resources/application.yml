@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: geecon-springai-demo
+  main:
+    web-application-type: none
+    banner-mode: off
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: ${MODEL:gpt-4.1-mini}

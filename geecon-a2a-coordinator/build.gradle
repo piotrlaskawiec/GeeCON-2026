@@ -1,0 +1,115 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.0.6'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.comsenity.geecon.genai'
+version = '1.0-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://repo.spring.io/milestone' }
+}
+
+ext {
+    langchain4jVersion = '1.14.0'
+    langchain4jAgenticVersion = '1.14.0-beta24'
+    otelInstrumentationVersion = '2.27.0'
+    otelBomVersion = '1.61.0'
+}
+
+// Force every io.opentelemetry:* artifact to >= 1.60.0 so LogRecordBuilder.setException(Throwable)
+// (added in 1.60.0 and called by newer otel SDK code paths) resolves at runtime. Imported via
+// Spring's dependencyManagement after Spring Boot's BOM so this pin wins over the Boot defaults.
+dependencyManagement {
+    imports {
+        mavenBom "io.opentelemetry:opentelemetry-bom:${otelBomVersion}"
+    }
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // Spring Boot 4 split spring-boot-actuator-autoconfigure into per-feature modules:
+    //  - spring-boot-starter-micrometer-metrics → OtlpMetricsExportAutoConfiguration etc.
+    //  - spring-boot-starter-opentelemetry      → OpenTelemetryProperties
+    // OtlpMetricsExportAutoConfiguration is @ConditionalOnClass(OpenTelemetryProperties.class),
+    // so without the opentelemetry starter the metrics autoconfig is skipped, no
+    // OtlpMeterRegistry bean is created, and gen_ai Micrometer meters never reach OTLP.
+    implementation 'org.springframework.boot:spring-boot-starter-micrometer-metrics'
+    implementation 'org.springframework.boot:spring-boot-starter-opentelemetry'
+
+    // Push Micrometer meters (gen_ai.client.token.usage etc.) to LGTM via OTLP, AND expose them
+    // at /actuator/prometheus for debugging.
+    implementation 'io.micrometer:micrometer-registry-otlp'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
+    // LangChain4j core + OpenAI provider for the local LLM agent (summarizer)
+    implementation platform("dev.langchain4j:langchain4j-bom:${langchain4jVersion}")
+    implementation 'dev.langchain4j:langchain4j'
+    implementation 'dev.langchain4j:langchain4j-open-ai'
+
+    // LangChain4j agentic framework + A2A client integration.
+    // Replaces the hand-rolled A2A client; brings in io.a2a:a2a-java-sdk-client transitively.
+    implementation "dev.langchain4j:langchain4j-agentic:${langchain4jAgenticVersion}"
+    implementation "dev.langchain4j:langchain4j-agentic-a2a:${langchain4jAgenticVersion}"
+
+    // langchain4j-observation: ObservationChatModelListener that emits the standard OTel GenAI
+    // semantic conventions (gen_ai.client.token.usage histogram + gen_ai.token.type tag) — the
+    // same metric Spring AI 2.x emits, so Prometheus queries work uniformly across all three agents.
+    implementation "dev.langchain4j:langchain4j-observation:${langchain4jAgenticVersion}"
+
+    // OpenTelemetry: auto-instrument HTTP client + Spring MVC; manual spans for the chat entry point.
+    implementation "io.opentelemetry.instrumentation:opentelemetry-spring-boot-starter:${otelInstrumentationVersion}"
+    implementation 'io.micrometer:micrometer-tracing-bridge-otel'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// OTel Java Agent — bytecode-level instrumentation of java.net.http.HttpClient and Spring MVC.
+// The langchain4j-agentic-a2a SDK constructs its own HttpClient internally; without the agent the
+// outbound A2A POSTs are uninstrumented and traceparent never reaches the remote agents, breaking
+// the Tempo trace into separate pieces. With the agent attached, every outbound HTTP call injects
+// W3C traceparent and every inbound Spring MVC request extracts it, so the three agents share one
+// trace tree.
+configurations { otelAgent }
+dependencies {
+    otelAgent "io.opentelemetry.javaagent:opentelemetry-javaagent:${otelInstrumentationVersion}"
+}
+
+tasks.named('bootRun') {
+    dependsOn configurations.otelAgent
+    doFirst {
+        jvmArgs "-javaagent:${configurations.otelAgent.singleFile}"
+    }
+    environment 'OTEL_SERVICE_NAME', 'geecon-a2a-coordinator'
+    environment 'OTEL_TRACES_EXPORTER', 'otlp'
+    environment 'OTEL_METRICS_EXPORTER', 'otlp'
+    environment 'OTEL_LOGS_EXPORTER', 'otlp'
+    environment 'OTEL_EXPORTER_OTLP_PROTOCOL', 'grpc'
+    environment 'OTEL_EXPORTER_OTLP_ENDPOINT', System.getenv('OTEL_EXPORTER_OTLP_ENDPOINT') ?: 'http://localhost:4317'
+    environment 'OTEL_INSTRUMENTATION_HTTP_CLIENT_CAPTURE_REQUEST_HEADERS', 'traceparent'
+    environment 'OTEL_INSTRUMENTATION_HTTP_SERVER_CAPTURE_REQUEST_HEADERS', 'traceparent'
+
+    // Tag every outbound HTTP client span with peer.service so Tempo's service-graph view
+    // labels both endpoints of every edge. Maps host:port -> service.name. Includes the
+    // OpenAI endpoint so the Summarizer's LLM call renders as "coordinator -> openai POST"
+    // instead of a bare "coordinator POST".
+    environment 'OTEL_INSTRUMENTATION_COMMON_PEER_SERVICE_MAPPING',
+            'localhost:8081=geecon-a2a-agenda-agent,' +
+            'localhost:8082=geecon-a2a-scoring-agent,' +
+            'api.openai.com:443=openai,' +
+            'api.openai.com=openai'
+}

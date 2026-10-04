@@ -1,0 +1,94 @@
+spring:
+  application:
+    name: geecon-a2a-coordinator
+  main:
+    banner-mode: off
+
+server:
+  port: 8080
+
+openai:
+  api-key: ${OPENAI_API_KEY:}
+  model: gpt-5.2
+
+geecon:
+  a2a:
+    public-url: http://localhost:8080
+    agenda-url: ${AGENDA_AGENT_URL:http://localhost:8081}
+    scoring-url: ${SCORING_AGENT_URL:http://localhost:8082}
+  # Guardrails — see src/main/java/.../coordinator/guardrail/. block=false makes a guardrail
+  # record the violation but let the request through (shadow mode); useful for tuning.
+  guardrails:
+    prompt-injection:
+      enabled: true
+      block: false
+    length:
+      enabled: true
+      block: true
+    llm-detector:
+      enabled: true
+      block: true
+      model: gpt-5-nano
+      min-chars: 32
+    output-leakage:
+      enabled: true
+      block: true
+
+# OpenTelemetry — points at docker-compose grafana/otel-lgtm by default.
+otel:
+  service:
+    name: geecon-a2a-coordinator
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+      protocol: ${OTEL_EXPORTER_OTLP_PROTOCOL:grpc}
+  traces:
+    exporter: otlp
+  metrics:
+    exporter: otlp
+  logs:
+    exporter: otlp
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,beans,conditions
+  observations:
+    annotations:
+      enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+  metrics:
+    distribution:
+      # Bracket-quote keys whose names contain literal dots — without it YAML treats every dot
+      # as a nesting level, so the property never reaches the meter.
+      percentiles-histogram:
+        "[gen_ai.client.token.usage]": true
+        "[gen_ai.client.operation.duration]": true
+        "[http.server.requests]": true
+      # Without an explicit max-expected-value the Boot Timer caps at 10 s — every quantile on
+      # the chain (which routinely takes >10 s) clamps to the largest finite bucket. Push the
+      # ceiling to 120 s so p95 reflects real latency.
+      maximum-expected-value:
+        "[http.server.requests]": 120s
+        "[gen_ai.client.operation.duration]": 120s
+    tags:
+      service.name: geecon-a2a-coordinator
+  # Push Micrometer meters to LGTM's OTLP HTTP endpoint.
+  # histogram-flavor=explicit_bucket_histogram + aggregation-temporality=cumulative is what
+  # LGTM's bundled OTel collector → Prometheus exporter accepts. The default flavor for
+  # bucketless DistributionSummary is BASE2_EXPONENTIAL_BUCKET_HISTOGRAM, which the
+  # collector's prometheusexporter silently drops because it has no fixed buckets to emit
+  # as Prometheus `_bucket` series. SLOs come from the GenAiMetricsConfig MeterFilter so
+  # every gen_ai.* meter actually has buckets to put in the histogram.
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_METRICS_OTLP_URL:http://localhost:4318/v1/metrics}
+        step: 5s
+        aggregation-temporality: cumulative
+        histogram-flavor: explicit_bucket_histogram
+        resource-attributes:
+          service.name: geecon-a2a-coordinator

@@ -1,0 +1,290 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    { "title": "Tokens",     "type": "link", "url": "/d/geecon-a2a-tokens" },
+    { "title": "Guardrails", "type": "link", "url": "/d/geecon-a2a-guardrails" }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "E2E latency (p50)",
+      "description": "Boot Micrometer http.server.requests Timer. Note: Micrometer's OtlpMeterRegistry emits Timers in MILLISECONDS (OTel SDK convention), unlike PrometheusMeterRegistry which uses seconds. Hence the meter name in LGTM is *_milliseconds_*; we /1000 to display in seconds.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value", "graphMode": "area",
+        "orientation": "horizontal", "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green",  "value": null },
+            { "color": "orange", "value": 5    },
+            { "color": "red",    "value": 30   }
+          ] }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_requests_milliseconds_bucket{service_name=\"geecon-a2a-coordinator\", uri=\"/chat\"}[5m]))) / 1000",
+          "legendFormat": "p50", "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "E2E latency (p95)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value", "graphMode": "area",
+        "orientation": "horizontal", "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green",  "value": null },
+            { "color": "orange", "value": 15   },
+            { "color": "red",    "value": 60   }
+          ] }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_milliseconds_bucket{service_name=\"geecon-a2a-coordinator\", uri=\"/chat\"}[5m]))) / 1000",
+          "legendFormat": "p95", "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Avg generation time per LLM call",
+      "description": "LangChain4j (coordinator) emits gen_ai.client.operation.duration; Spring AI 1.x and 2.x (scoring + agenda) emit gen_ai.client.operation. Both reach LGTM as *_milliseconds_* via OtlpMeterRegistry; /1000 to display in seconds.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value", "graphMode": "area",
+        "orientation": "horizontal", "textMode": "auto"
+      },
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+      "targets": [
+        {
+          "expr": "(\n  sum(rate(gen_ai_client_operation_duration_milliseconds_sum{service_name=\"geecon-a2a-coordinator\"}[5m]))\n  + sum(rate(gen_ai_client_operation_milliseconds_sum{service_name=~\"geecon-a2a-agenda-agent|geecon-a2a-scoring-agent\"}[5m]))\n)\n/ ignoring(le)\n(\n  sum(rate(gen_ai_client_operation_duration_milliseconds_count{service_name=\"geecon-a2a-coordinator\"}[5m]))\n  + sum(rate(gen_ai_client_operation_milliseconds_count{service_name=~\"geecon-a2a-agenda-agent|geecon-a2a-scoring-agent\"}[5m]))\n)\n/ 1000",
+          "legendFormat": "avg", "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Aggregate TPS (output tokens / s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value", "graphMode": "area",
+        "orientation": "horizontal", "textMode": "auto"
+      },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+      "targets": [
+        {
+          "expr": "sum(rate({__name__=~\"gen_ai_client_token_usage(_tokens)?(_sum|_total)\", gen_ai_token_type=\"output\"}[5m]))\n/\n(\n  (\n    sum(rate(gen_ai_client_operation_duration_milliseconds_sum{service_name=\"geecon-a2a-coordinator\"}[5m]))\n    + sum(rate(gen_ai_client_operation_milliseconds_sum{service_name=~\"geecon-a2a-agenda-agent|geecon-a2a-scoring-agent\"}[5m]))\n  ) / 1000\n)",
+          "legendFormat": "tokens/s", "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "End-to-End latency — POST /chat (p50 / p95 / p99)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_requests_milliseconds_bucket{service_name=\"geecon-a2a-coordinator\", uri=\"/chat\"}[5m]))) / 1000",
+          "legendFormat": "p50", "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_milliseconds_bucket{service_name=\"geecon-a2a-coordinator\", uri=\"/chat\"}[5m]))) / 1000",
+          "legendFormat": "p95", "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_requests_milliseconds_bucket{service_name=\"geecon-a2a-coordinator\", uri=\"/chat\"}[5m]))) / 1000",
+          "legendFormat": "p99", "refId": "C"
+        }
+      ]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Per-step latency — A2A hop (avg by destination)",
+      "description": "Coordinator's A2A calls go over java.net.http.HttpClient — only OTel javaagent instruments that, and its histogram clamps at 10s. Instead we measure server-side at the destination: each agent's own http.server.requests Timer (POST / on agenda, POST /a2a on scoring). Network RTT ≈ 1ms, so server wall-time ≈ A2A hop. These Timers are summaries (no buckets), so it's avg, not p95.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 30, "lineWidth": 2, "stacking": { "mode": "none" } }
+        }
+      },
+      "targets": [
+        {
+          "expr": "(\n  rate(http_server_requests_milliseconds_sum{service_name=\"geecon-a2a-agenda-agent\", uri=\"/\", method=\"POST\"}[5m])\n  /\n  rate(http_server_requests_milliseconds_count{service_name=\"geecon-a2a-agenda-agent\", uri=\"/\", method=\"POST\"}[5m])\n) / 1000",
+          "legendFormat": "agenda-agent (:8081)", "refId": "Agenda"
+        },
+        {
+          "expr": "(\n  rate(http_server_requests_milliseconds_sum{service_name=\"geecon-a2a-scoring-agent\", uri=\"/a2a\", method=\"POST\"}[5m])\n  /\n  rate(http_server_requests_milliseconds_count{service_name=\"geecon-a2a-scoring-agent\", uri=\"/a2a\", method=\"POST\"}[5m])\n) / 1000",
+          "legendFormat": "scoring-agent (:8082)", "refId": "Scoring"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Per-step latency — model-only (p95 by agent × model)",
+      "description": "LLM call wall-time observed inside each agent. Three pinned queries — coordinator (LangChain4j: gen_ai.client.operation.duration) and agenda + scoring (Spring AI: gen_ai.client.operation). All emitted as *_milliseconds_bucket via OtlpMeterRegistry; /1000 to display in seconds.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 30, "lineWidth": 2 }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, gen_ai_request_model) (rate(gen_ai_client_operation_duration_milliseconds_bucket{service_name=\"geecon-a2a-coordinator\"}[5m]))) / 1000",
+          "legendFormat": "coordinator / {{gen_ai_request_model}}", "refId": "Coord"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, gen_ai_request_model) (rate(gen_ai_client_operation_milliseconds_bucket{service_name=\"geecon-a2a-agenda-agent\"}[5m]))) / 1000",
+          "legendFormat": "agenda / {{gen_ai_request_model}}", "refId": "Agenda"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, gen_ai_request_model) (rate(gen_ai_client_operation_milliseconds_bucket{service_name=\"geecon-a2a-scoring-agent\"}[5m]))) / 1000",
+          "legendFormat": "scoring / {{gen_ai_request_model}}", "refId": "Scoring"
+        }
+      ]
+    },
+
+    {
+      "type": "timeseries",
+      "title": "TPS per model — output tokens/s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "bars", "fillOpacity": 50, "lineWidth": 1, "stacking": { "mode": "normal" } }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (gen_ai_request_model) (rate({__name__=~\"gen_ai_client_token_usage(_tokens)?(_sum|_total)\", gen_ai_token_type=\"output\"}[5m]))\n/ on(gen_ai_request_model) group_left() (\n  (\n    sum by (gen_ai_request_model) (rate(gen_ai_client_operation_duration_milliseconds_sum{service_name=\"geecon-a2a-coordinator\"}[5m]))\n    or sum by (gen_ai_request_model) (rate(gen_ai_client_operation_milliseconds_sum{service_name=~\"geecon-a2a-agenda-agent|geecon-a2a-scoring-agent\"}[5m]))\n  ) / 1000\n)",
+          "legendFormat": "{{gen_ai_request_model}}", "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "TPS per agent — output tokens/s",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "bars", "fillOpacity": 50, "lineWidth": 1, "stacking": { "mode": "normal" } }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (service_name) (rate({__name__=~\"gen_ai_client_token_usage(_tokens)?(_sum|_total)\", gen_ai_token_type=\"output\", service_name=\"geecon-a2a-coordinator\"}[5m]))\n/ on(service_name) group_left()\n(sum by (service_name) (rate(gen_ai_client_operation_duration_milliseconds_sum{service_name=\"geecon-a2a-coordinator\"}[5m])) / 1000)",
+          "legendFormat": "geecon-a2a-coordinator", "refId": "Coord"
+        },
+        {
+          "expr": "sum by (service_name) (rate({__name__=~\"gen_ai_client_token_usage(_tokens)?(_sum|_total)\", gen_ai_token_type=\"output\", service_name=\"geecon-a2a-agenda-agent\"}[5m]))\n/ on(service_name) group_left()\n(sum by (service_name) (rate(gen_ai_client_operation_milliseconds_sum{service_name=\"geecon-a2a-agenda-agent\"}[5m])) / 1000)",
+          "legendFormat": "geecon-a2a-agenda-agent", "refId": "Agenda"
+        },
+        {
+          "expr": "sum by (service_name) (rate({__name__=~\"gen_ai_client_token_usage(_tokens)?(_sum|_total)\", gen_ai_token_type=\"output\", service_name=\"geecon-a2a-scoring-agent\"}[5m]))\n/ on(service_name) group_left()\n(sum by (service_name) (rate(gen_ai_client_operation_milliseconds_sum{service_name=\"geecon-a2a-scoring-agent\"}[5m])) / 1000)",
+          "legendFormat": "geecon-a2a-scoring-agent", "refId": "Scoring"
+        }
+      ]
+    },
+
+    {
+      "type": "table",
+      "title": "Per-(agent, model) breakdown",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "options": { "showHeader": true },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "expr": "label_replace(\n  histogram_quantile(0.95, sum by (le, gen_ai_request_model) (rate(gen_ai_client_operation_duration_milliseconds_bucket{service_name=\"geecon-a2a-coordinator\"}[5m]))) / 1000\n  , \"service_name\", \"geecon-a2a-coordinator\", \"\", \"\")",
+          "format": "table", "instant": true, "refId": "P95Coord"
+        },
+        {
+          "expr": "label_replace(\n  histogram_quantile(0.95, sum by (le, gen_ai_request_model) (rate(gen_ai_client_operation_milliseconds_bucket{service_name=\"geecon-a2a-agenda-agent\"}[5m]))) / 1000\n  , \"service_name\", \"geecon-a2a-agenda-agent\", \"\", \"\")",
+          "format": "table", "instant": true, "refId": "P95Agenda"
+        },
+        {
+          "expr": "label_replace(\n  histogram_quantile(0.95, sum by (le, gen_ai_request_model) (rate(gen_ai_client_operation_milliseconds_bucket{service_name=\"geecon-a2a-scoring-agent\"}[5m]))) / 1000\n  , \"service_name\", \"geecon-a2a-scoring-agent\", \"\", \"\")",
+          "format": "table", "instant": true, "refId": "P95Scoring"
+        },
+        {
+          "expr": "sum by (service_name, gen_ai_request_model) (rate({__name__=~\"gen_ai_client_token_usage(_tokens)?(_sum|_total)\", gen_ai_token_type=\"output\"}[5m]))",
+          "format": "table", "instant": true, "refId": "OUT"
+        },
+        {
+          "expr": "sum by (service_name, gen_ai_request_model) (rate({__name__=~\"gen_ai_client_token_usage(_tokens)?(_sum|_total)\", gen_ai_token_type=\"input\"}[5m]))",
+          "format": "table", "instant": true, "refId": "IN"
+        }
+      ],
+      "transformations": [
+        { "id": "merge" },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true },
+            "renameByName": {
+              "service_name":         "Agent",
+              "gen_ai_request_model": "Model",
+              "Value #P95Coord":      "Latency p95 (s)",
+              "Value #P95Agenda":     "Latency p95 (s)",
+              "Value #P95Scoring":    "Latency p95 (s)",
+              "Value #OUT":           "Output tokens/s",
+              "Value #IN":            "Input tokens/s"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["geecon", "a2a", "performance", "latency", "tps"],
+  "templating": { "list": [] },
+  "time": { "from": "now-30m", "to": "now" },
+  "timezone": "",
+  "title": "GeeCON A2A — Performance",
+  "uid": "geecon-a2a-performance",
+  "version": 7,
+  "weekStart": ""
+}

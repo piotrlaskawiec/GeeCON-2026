@@ -1,0 +1,8 @@
+rootProject.name = 'geecon-2026-ai'
+include 'geecon-agenda-extractor'
+include 'geecon-agenda-mcp-app'
+include 'geecon-a2a-coordinator'
+include 'geecon-a2a-agenda-agent'
+include 'geecon-a2a-scoring-agent'
+include 'geecon-langchain4j-demo'
+include 'geecon-springai-demo'

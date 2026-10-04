@@ -1,0 +1,75 @@
+spring:
+  application:
+    name: geecon-a2a-agenda-agent
+  main:
+    banner-mode: off
+
+  ai:
+    a2a:
+      server:
+        enabled: true
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-5.1
+    mcp:
+      client:
+        enabled: true
+        type: SYNC
+        request-timeout: 60s
+        streamable-http:
+          connections:
+            geecon-agenda:
+              url: ${GEECON_MCP_URL:http://geecon.mcpserver.pl:8080}
+              endpoint: /
+
+geecon:
+  a2a:
+    public-url: http://localhost:8081
+
+server:
+  port: 8081
+
+# OpenTelemetry — points at docker-compose grafana/otel-lgtm by default.
+otel:
+  service:
+    name: geecon-a2a-agenda-agent
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+      protocol: ${OTEL_EXPORTER_OTLP_PROTOCOL:grpc}
+  traces:
+    exporter: otlp
+  metrics:
+    exporter: otlp
+  logs:
+    exporter: otlp
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  observations:
+    annotations:
+      enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+  metrics:
+    distribution:
+      percentiles-histogram:
+        "[gen_ai.client.token.usage]": true
+        "[gen_ai.client.operation.duration]": true
+    tags:
+      service.name: geecon-a2a-agenda-agent
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_METRICS_OTLP_URL:http://localhost:4318/v1/metrics}
+        step: 5s
+        aggregation-temporality: cumulative
+        histogram-flavor: explicit_bucket_histogram
+        resource-attributes:
+          service.name: geecon-a2a-agenda-agent

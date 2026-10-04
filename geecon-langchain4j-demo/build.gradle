@@ -1,0 +1,30 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.comsenity.geecon.genai'
+version = '1.0-SNAPSHOT'
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
+}
+
+repositories { mavenCentral() }
+
+ext {
+    langchain4jVersion = '1.14.0'
+    langchain4jBetaVersion = '1.14.0-beta24'   // -beta24 carries langchain4j-mcp at the same time as the 1.14.0 core
+}
+
+dependencies {
+    implementation project(':geecon-agenda-extractor')
+
+
+    implementation platform("dev.langchain4j:langchain4j-bom:${langchain4jVersion}")
+    implementation 'dev.langchain4j:langchain4j'
+    implementation 'dev.langchain4j:langchain4j-open-ai'
+    // MCP client + Streamable-HTTP transport
+    implementation "dev.langchain4j:langchain4j-mcp:${langchain4jBetaVersion}"
+}
+
+test { useJUnitPlatform() }

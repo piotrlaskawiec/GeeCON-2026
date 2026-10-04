@@ -1,0 +1,84 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.5.0'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.comsenity.geecon.genai'
+version = '1.0-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://repo.spring.io/milestone' }
+    maven { url 'https://repo.embabel.com/libs-release' }
+}
+
+ext {
+    embabelVersion = '0.3.5'
+    otelInstrumentationVersion = '2.27.0'
+    otelBomVersion = '1.61.0'
+}
+
+// Force every io.opentelemetry:* artifact to >= 1.60.0 so LogRecordBuilder.setException(Throwable)
+// (added in 1.60.0 and called by newer otel SDK code paths) resolves at runtime. Imported via
+// Spring's dependencyManagement after Spring Boot's BOM so this pin wins over the Boot defaults.
+dependencyManagement {
+    imports {
+        mavenBom "io.opentelemetry:opentelemetry-bom:${otelBomVersion}"
+    }
+}
+
+dependencies {
+    implementation project(':geecon-agenda-extractor')
+
+    // Embabel native A2A server (Spring Boot 3.5.x). Pulls in the platform autoconfigure,
+    // OpenAI provider autoconfigure, and the A2A endpoint registrar in one starter set.
+    implementation "com.embabel.agent:embabel-agent-starter-openai:${embabelVersion}"
+    implementation "com.embabel.agent:embabel-agent-starter-a2a:${embabelVersion}"
+
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // Push Micrometer meters (Embabel + Spring AI 1.1.x emit gen_ai.client.token.usage and
+    // friends) to LGTM via OTLP + expose on /actuator/prometheus for debugging.
+    implementation 'io.micrometer:micrometer-registry-otlp'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
+    // OpenTelemetry — auto-instrumentation + Embabel/Spring AI observability bridge
+    implementation "io.opentelemetry.instrumentation:opentelemetry-spring-boot-starter:${otelInstrumentationVersion}"
+    implementation 'io.micrometer:micrometer-tracing-bridge-otel'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// OTel Java Agent — bytecode-level instrumentation of Spring MVC (the A2A endpoint contributed by
+// embabel-agent-starter-a2a). Required so the inbound POST from the coordinator becomes a child
+// span of the coordinator's A2A client span. Without it the scoring agent's spans become a
+// separate root trace, splitting the conversation in Tempo.
+configurations { otelAgent }
+dependencies {
+    otelAgent "io.opentelemetry.javaagent:opentelemetry-javaagent:${otelInstrumentationVersion}"
+}
+
+tasks.named('bootRun') {
+    dependsOn configurations.otelAgent
+    doFirst {
+        jvmArgs "-javaagent:${configurations.otelAgent.singleFile}"
+    }
+    environment 'OTEL_SERVICE_NAME', 'geecon-a2a-scoring-agent'
+    environment 'OTEL_TRACES_EXPORTER', 'otlp'
+    environment 'OTEL_METRICS_EXPORTER', 'otlp'
+    environment 'OTEL_LOGS_EXPORTER', 'otlp'
+    environment 'OTEL_EXPORTER_OTLP_PROTOCOL', 'grpc'
+    environment 'OTEL_EXPORTER_OTLP_ENDPOINT', System.getenv('OTEL_EXPORTER_OTLP_ENDPOINT') ?: 'http://localhost:4317'
+    environment 'OTEL_PROPAGATORS', 'tracecontext,baggage'
+}
